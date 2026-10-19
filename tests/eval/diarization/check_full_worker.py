@@ -19,7 +19,8 @@ manifest = json.loads((root / 'full-native-ami.json').read_text())
 frozen = json.loads((root / 'reports/2026-10-18/full-native.json').read_text())
 expected = {r['id']: r for r in frozen['rows'] if r['engine'] == 'candidate'}
 runtime = dict(platform=platform.platform(), machine=platform.machine(),
-               logical_cpu_count=os.cpu_count())
+               logical_cpu_count=os.cpu_count(),
+               worker_build_rustflags=os.environ.get('MINUTES_SPEAKER_BUILD_RUSTFLAGS', 'unrecorded'))
 if sys.platform.startswith('linux'):
     # The Linux helper deliberately links the system CPU BLAS implementation.
     # Bind that implementation too; an executable digest alone cannot identify
@@ -44,6 +45,7 @@ identity = dict(probe_sha256=digest(a.probe), worker_sha256=digest(a.worker),
                     Path('crates/speaker-worker/Cargo.toml'),
                     Path('crates/speaker-worker/build.rs'),
                     Path('crates/speaker-worker/vcpkg.json'),
+                    Path('.github/workflows/full-speaker-worker.yml'),
                     Path('crates/speaker-worker/Cargo.lock')]})
 print(json.dumps(dict(identity=identity)), flush=True)
 a.output.mkdir(parents=True, exist_ok=False)

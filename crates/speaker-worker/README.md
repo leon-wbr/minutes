@@ -37,8 +37,19 @@ its license notices remain in the vcpkg installation. No prebuilt OpenBLAS DLL
 is downloaded or added to the runtime executable search path.
 
 ```bash
-cargo build --release --locked --manifest-path crates/speaker-worker/Cargo.toml
+RUSTFLAGS="-C target-cpu=native" cargo build --release --locked --manifest-path crates/speaker-worker/Cargo.toml
 ```
+
+In PowerShell, set `$env:RUSTFLAGS = '-C target-cpu=native'` before the Cargo
+command. Build on the machine that will run the helper: Rust's
+[`target-cpu=native`](https://doc.rust-lang.org/rustc/codegen-options/index.html#target-cpu)
+enables that CPU's instructions. Do not distribute this executable or its
+compiled cache to other machines. This flag applies only to the separate helper;
+build the Minutes host with its ordinary portable flags (in PowerShell, first
+run `Remove-Item Env:RUSTFLAGS`). The native regression
+workflow does not restore compiled helper artifacts across runners. CPU-specific
+compilation is an optimization under evaluation, not a claim that Intel runtime
+qualification has passed.
 
 Code: Apache-2.0 Speakrs at `af8013f95a53a37a554d8abc6e4ae2ab9a614be6`;
 Minutes wrapper MIT. Default upstream features are disabled; only `cpu` is

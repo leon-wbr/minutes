@@ -34,6 +34,9 @@ jobs:
       CARGO_INCREMENTAL: 0
       VCPKG_MAX_CONCURRENCY: 2
       WINDOWS_BLAS_TRIPLET: x64-windows-static-md-release
+      # This unbundled helper is compiled and exercised on the same machine.
+      # Keep the host portable and never restore CPU-specific helper objects.
+      MINUTES_SPEAKER_BUILD_RUSTFLAGS: -C target-cpu=native
     defaults:
       run:
         shell: bash
@@ -93,17 +96,24 @@ jobs:
         with:
           workspaces: |
             . -> target
-            crates/speaker-worker -> target
           key: full-speaker-worker-${{ runner.arch }}
           cache-on-failure: true
       - name: Build explicitly pinned CPU worker
+        env:
+          RUSTFLAGS: ${{ env.MINUTES_SPEAKER_BUILD_RUSTFLAGS }}
         run: cargo build --release --locked --manifest-path crates/speaker-worker/Cargo.toml
-      - name: Lint standalone helper and feature-gated host
+      - name: Lint standalone helper
+        env:
+          RUSTFLAGS: ${{ env.MINUTES_SPEAKER_BUILD_RUSTFLAGS }}
         run: |
           cargo fmt --manifest-path crates/speaker-worker/Cargo.toml -- --check
           cargo clippy --locked --manifest-path crates/speaker-worker/Cargo.toml --all-targets -- -D warnings
+      - name: Lint feature-gated host
+        run: |
           cargo clippy --locked -p minutes-core --no-default-features --features diarize --lib --example full_diarize_file -- -D warnings
       - name: Worker memory-ceiling regression
+        env:
+          RUSTFLAGS: ${{ env.MINUTES_SPEAKER_BUILD_RUSTFLAGS }}
         run: cargo test --locked --manifest-path crates/speaker-worker/Cargo.toml
       - name: Build actual host bridge probe
         run: cargo build --release --locked -p minutes-core --no-default-features --features diarize --example full_diarize_file
