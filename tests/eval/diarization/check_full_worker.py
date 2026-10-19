@@ -43,6 +43,7 @@ identity = dict(probe_sha256=digest(a.probe), worker_sha256=digest(a.worker),
                     Path('crates/speaker-worker/src/protocol.rs'),
                     Path('crates/speaker-worker/Cargo.toml'),
                     Path('crates/speaker-worker/build.rs'),
+                    Path('crates/speaker-worker/vcpkg.json'),
                     Path('crates/speaker-worker/Cargo.lock')]})
 print(json.dumps(dict(identity=identity)), flush=True)
 a.output.mkdir(parents=True, exist_ok=False)
@@ -103,10 +104,17 @@ for item in manifest['recordings']:
     print('Running ' + item['id'], flush=True)
     started = time.monotonic()
     with (a.output / (item['id'] + '.json')).open('xb') as out, (a.output / (item['id'] + '.stderr')).open('xb') as err:
-        subprocess.run([str(a.probe.resolve()), str(a.worker.resolve()),
+        completed = subprocess.run([str(a.probe.resolve()), str(a.worker.resolve()),
                         str((a.fixtures / 'candidate-models').resolve()), str(audio.resolve())],
-                       stdin=subprocess.DEVNULL, stdout=out, stderr=err, check=True, timeout=930)
+                       stdin=subprocess.DEVNULL, stdout=out, stderr=err, timeout=930)
     elapsed = time.monotonic() - started
+    if completed.returncode:
+        failure = dict(**identity, id=item['id'], processing_seconds=elapsed,
+                       real_time_factor=elapsed / item['duration'],
+                       exit_code=completed.returncode, gates=dict(engine_completed=False))
+        (a.output / (item['id'] + '-regression.json')).write_text(json.dumps(failure, indent=2) + '\n')
+        print(json.dumps(failure), flush=True)
+        raise AssertionError('host/worker did not complete successfully; see bounded local stderr')
     result = json.loads((a.output / (item['id'] + '.json')).read_text())
     assert result['profile_namespace'] == 'speakrs_af8013f_cpu_67f963b6_anonymous_v1'
     scored = score(reference_segments(reference_path, item['duration']), result, item['duration'])

@@ -28,10 +28,12 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest, macos-15-intel]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       CARGO_BUILD_JOBS: 2
       CARGO_INCREMENTAL: 0
+      VCPKG_MAX_CONCURRENCY: 2
+      WINDOWS_BLAS_TRIPLET: x64-windows-static-md-release
     defaults:
       run:
         shell: bash
@@ -52,6 +54,41 @@ jobs:
       - name: Select Speech SDK on Intel macOS
         if: runner.os == 'macOS' && runner.arch == 'X64'
         run: echo "DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer" >> "$GITHUB_ENV"
+      - name: Read the pinned Windows BLAS source
+        if: runner.os == 'Windows'
+        id: windows-blas
+        shell: pwsh
+        run: |
+          $manifest = Get-Content crates/speaker-worker/vcpkg.json -Raw | ConvertFrom-Json
+          "revision=$($manifest.'builtin-baseline')" >> $env:GITHUB_OUTPUT
+          $cpu = (Get-CimInstance Win32_Processor).Name -join ','
+          $digest = [System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes($cpu))
+          "cpu=$([Convert]::ToHexString($digest).Substring(0, 16))" >> $env:GITHUB_OUTPUT
+          "image=$env:ImageVersion" >> $env:GITHUB_OUTPUT
+      - uses: actions/checkout@v7
+        if: runner.os == 'Windows'
+        with:
+          repository: microsoft/vcpkg
+          ref: ${{ steps.windows-blas.outputs.revision }}
+          persist-credentials: false
+          path: .vcpkg-openblas
+      - name: Cache static Windows CPU library and license notices
+        if: runner.os == 'Windows'
+        uses: actions/cache@v6
+        with:
+          path: .vcpkg-openblas/installed
+          key: speaker-blas-${{ steps.windows-blas.outputs.image }}-${{ steps.windows-blas.outputs.cpu }}-${{ env.WINDOWS_BLAS_TRIPLET }}-${{ hashFiles('crates/speaker-worker/vcpkg.json') }}
+      - name: Build the pinned static Windows BLAS library
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & ./.vcpkg-openblas/bootstrap-vcpkg.bat -disableMetrics
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $root = (Resolve-Path .vcpkg-openblas).Path
+          & "$root/vcpkg.exe" install "--x-manifest-root=$pwd/crates/speaker-worker" "--x-install-root=$root/installed" "--triplet=$env:WINDOWS_BLAS_TRIPLET" --disable-metrics
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          "VCPKG_ROOT=$root" >> $env:GITHUB_ENV
+          "VCPKGRS_TRIPLET=$env:WINDOWS_BLAS_TRIPLET" >> $env:GITHUB_ENV
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |

@@ -13,9 +13,28 @@ On Linux, install your distribution's OpenBLAS development package first
 OpenBLAS shared library at run time. This enables [ndarray's BLAS
 matrix-multiplication path](https://docs.rs/ndarray/0.17.2/ndarray/#crate-feature-flags)
 in the standalone helper. [OpenBLAS](https://github.com/OpenMathLib/OpenBLAS)
-provides the optimized system CPU library. macOS uses the upstream
-Accelerate path, and Windows retains its native Rust CPU path. This requirement
-does not add OpenBLAS to the ordinary Minutes workspace dependency graph.
+provides the optimized system CPU library. macOS uses Accelerate, including the
+legacy CBLAS path on systems without upstream's newer BLAS thread API.
+These BLAS dependencies belong to the standalone helper.
+
+Windows uses statically linked OpenBLAS so the supervisor can continue binding
+and launching one immutable executable. Build the pinned vcpkg manifest from a
+Developer PowerShell with C++ build tools, CMake and Ninja available:
+
+```powershell
+git clone https://github.com/microsoft/vcpkg C:/src/minutes-vcpkg
+git -C C:/src/minutes-vcpkg checkout 664933b8d385dfc01f4e0cdff4c7c74e71f6a740
+& C:/src/minutes-vcpkg/bootstrap-vcpkg.bat -disableMetrics
+& C:/src/minutes-vcpkg/vcpkg.exe install --x-manifest-root=crates/speaker-worker --x-install-root=C:/src/minutes-vcpkg/installed --triplet=x64-windows-static-md-release --disable-metrics
+$env:VCPKG_ROOT = 'C:/src/minutes-vcpkg'
+$env:VCPKGRS_TRIPLET = 'x64-windows-static-md-release'
+```
+
+Do not set `VCPKGRS_DYNAMIC`: the helper requires static BLAS linkage. The
+[vcpkg Rust build helper](https://docs.rs/vcpkg/0.2.15/vcpkg/) discovers this
+installation. The pinned Microsoft port builds OpenBLAS 0.3.34 from source;
+its license notices remain in the vcpkg installation. No prebuilt OpenBLAS DLL
+is downloaded or added to the runtime executable search path.
 
 ```bash
 cargo build --release --locked --manifest-path crates/speaker-worker/Cargo.toml

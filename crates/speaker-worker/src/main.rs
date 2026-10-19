@@ -10,6 +10,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 use zeroize::Zeroizing;
 
+struct CanonicalAudio {
+    samples: Zeroizing<Vec<f32>>,
+    sha256: String,
+}
+
 fn main() {
     if let Err(error) = run() {
         eprintln!("full speaker worker: {error}");
@@ -60,31 +65,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         std::io::copy(&mut input, &mut output)?;
     }
     verify_models(snapshot.path())?;
-    let mut samples = Zeroizing::new(Vec::new());
-    let mut input = std::io::stdin().lock();
-    let mut hasher = Sha256::new();
-    loop {
-        let mut bytes = [0; 4];
-        let first = input.read(&mut bytes[..1])?;
-        if first == 0 {
-            break;
-        }
-        input.read_exact(&mut bytes[1..])?;
-        if samples.len() >= MAX_SAMPLES {
-            return Err("one-hour audio budget exceeded".into());
-        }
-        let value = f32::from_le_bytes(bytes);
-        if !value.is_finite() {
-            return Err("non-finite PCM input".into());
-        }
-        hasher.update(bytes);
-        samples.push(value);
-    }
-    if samples.is_empty() {
-        return Err("empty PCM input".into());
-    }
+    let CanonicalAudio {
+        samples,
+        sha256: audio_sha256,
+    } = read_pcm(std::io::stdin().lock(), MAX_SAMPLES)?;
     let sample_count = samples.len();
-    let audio_sha256 = format!("{:x}", hasher.finalize());
     let mut pipeline =
         speakrs::OwnedDiarizationPipeline::from_dir(snapshot.path(), speakrs::ExecutionMode::Cpu)?;
     let step = pipeline.segmentation_step();
@@ -120,6 +105,47 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     std::io::stdout().lock().write_all(&output)?;
     Ok(())
+}
+
+fn read_pcm(
+    mut input: impl Read,
+    max_samples: usize,
+) -> Result<CanonicalAudio, Box<dyn std::error::Error>> {
+    let mut samples = Zeroizing::new(Vec::new());
+    let mut bytes = Zeroizing::new([0_u8; 64 * 1024]);
+    let mut carry = 0;
+    let mut hasher = Sha256::new();
+    loop {
+        let read = input.read(&mut bytes[carry..])?;
+        if read == 0 {
+            if carry != 0 {
+                return Err("truncated PCM sample".into());
+            }
+            break;
+        }
+        let available = carry + read;
+        let complete = available - available % 4;
+        if complete / 4 > max_samples - samples.len() {
+            return Err("one-hour audio budget exceeded".into());
+        }
+        for sample in bytes[..complete].chunks_exact(4) {
+            let value = f32::from_le_bytes(sample.try_into()?);
+            if !value.is_finite() {
+                return Err("non-finite PCM input".into());
+            }
+            samples.push(value);
+        }
+        hasher.update(&bytes[..complete]);
+        bytes.copy_within(complete..available, 0);
+        carry = available - complete;
+    }
+    if samples.is_empty() {
+        return Err("empty PCM input".into());
+    }
+    Ok(CanonicalAudio {
+        samples,
+        sha256: format!("{:x}", hasher.finalize()),
+    })
 }
 
 fn canonical_segment(
@@ -236,6 +262,50 @@ fn install_limits() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pcm_pipe_fragmentation_preserves_samples_and_digest() {
+        use sha2::Digest;
+        use std::io::Read;
+        struct Fragmented<'a> {
+            remaining: &'a [u8],
+            fragment: usize,
+        }
+        impl Read for Fragmented<'_> {
+            fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+                let count = output.len().min(self.fragment).min(self.remaining.len());
+                output[..count].copy_from_slice(&self.remaining[..count]);
+                self.remaining = &self.remaining[count..];
+                Ok(count)
+            }
+        }
+        let samples: Vec<f32> = (0..50_000).map(|i| (i % 17) as f32 / 17.0).collect();
+        let bytes: Vec<u8> = samples.iter().flat_map(|f| f.to_le_bytes()).collect();
+        let expected_digest = format!("{:x}", sha2::Sha256::digest(&bytes));
+        for fragment in [1, 2, 3, 7, 65_535, 65_536] {
+            let actual = super::read_pcm(
+                Fragmented {
+                    remaining: &bytes,
+                    fragment,
+                },
+                samples.len(),
+            )
+            .unwrap();
+            assert_eq!(*actual.samples, samples);
+            assert_eq!(actual.sha256, expected_digest);
+        }
+    }
+
+    #[test]
+    fn pcm_pipe_rejects_truncation_nonfinite_and_over_budget_input() {
+        for length in [0, 1, 2, 3, 5, 6, 7] {
+            assert!(super::read_pcm(std::io::Cursor::new(vec![0; length]), 2).is_err());
+        }
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!(super::read_pcm(std::io::Cursor::new(invalid.to_le_bytes()), 2).is_err());
+        }
+        assert!(super::read_pcm(std::io::Cursor::new(vec![0; 12]), 2).is_err());
+    }
+
     #[test]
     fn invalid_native_activity_cannot_be_hidden_by_padding_clamp() {
         for (start, end) in [
