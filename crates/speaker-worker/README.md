@@ -8,6 +8,15 @@ production default promotion and named voice enrollment remain unqualified.
 
 Build with the repository's Rust 1.95.0 toolchain:
 
+On Linux, install your distribution's OpenBLAS development package first
+(`libopenblas-dev` on Debian/Ubuntu); the resulting helper also needs the system
+OpenBLAS shared library at run time. This enables [ndarray's BLAS
+matrix-multiplication path](https://docs.rs/ndarray/0.17.2/ndarray/#crate-feature-flags)
+in the standalone helper. [OpenBLAS](https://github.com/OpenMathLib/OpenBLAS)
+provides the optimized system CPU library. macOS uses the upstream
+Accelerate path, and Windows retains its native Rust CPU path. This requirement
+does not add OpenBLAS to the ordinary Minutes workspace dependency graph.
+
 ```bash
 cargo build --release --locked --manifest-path crates/speaker-worker/Cargo.toml
 ```

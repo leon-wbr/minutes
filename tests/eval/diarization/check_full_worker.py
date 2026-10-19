@@ -3,8 +3,10 @@
 import argparse
 import json
 import os
+import platform
 from pathlib import Path
 import subprocess
+import sys
 import time
 from run import digest, reference_segments, score
 
@@ -16,7 +18,22 @@ root = Path(__file__).resolve().parent
 manifest = json.loads((root / 'full-native-ami.json').read_text())
 frozen = json.loads((root / 'reports/2026-10-18/full-native.json').read_text())
 expected = {r['id']: r for r in frozen['rows'] if r['engine'] == 'candidate'}
+runtime = dict(platform=platform.platform(), machine=platform.machine(),
+               logical_cpu_count=os.cpu_count())
+if sys.platform.startswith('linux'):
+    # The Linux helper deliberately links the system CPU BLAS implementation.
+    # Bind that implementation too; an executable digest alone cannot identify
+    # the shared library used for the measured numerical work.
+    libraries = []
+    listing = subprocess.check_output(['ldd', str(a.worker.resolve())], text=True)
+    for line in listing.splitlines():
+        if 'openblas' in line.lower() and '=>' in line:
+            library = Path(line.split('=>', 1)[1].split(' (', 1)[0].strip()).resolve(strict=True)
+            libraries.append(dict(name=library.name, sha256=digest(library)))
+    assert libraries, 'Linux helper is missing the configured OpenBLAS runtime'
+    runtime['openblas_libraries'] = libraries
 identity = dict(probe_sha256=digest(a.probe), worker_sha256=digest(a.worker),
+                runtime=runtime,
                 manifest_sha256=digest(root / 'full-native-ami.json'),
                 check_sha256=digest(Path(__file__)),
                 source_sha256={str(p): digest(root.parents[2] / p) for p in [
@@ -24,7 +41,10 @@ identity = dict(probe_sha256=digest(a.probe), worker_sha256=digest(a.worker),
                     Path('crates/core/src/bounded_child.rs'),
                     Path('crates/speaker-worker/src/main.rs'),
                     Path('crates/speaker-worker/src/protocol.rs'),
+                    Path('crates/speaker-worker/Cargo.toml'),
+                    Path('crates/speaker-worker/build.rs'),
                     Path('crates/speaker-worker/Cargo.lock')]})
+print(json.dumps(dict(identity=identity)), flush=True)
 a.output.mkdir(parents=True, exist_ok=False)
 rows = []
 # Kill only our own synthetic probe after its supervised worker appears. The

@@ -17,6 +17,11 @@ tempfile = "3"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Enable the existing ndarray backend's documented system BLAS path only in
+# this standalone helper. Speakrs and its model parameters remain pinned.
+ndarray = { version = "=0.17.2", features = ["blas"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 mach2 = "0.7"
 

@@ -137,7 +137,7 @@ pub(super) fn diarize(
         )
         .env("RAYON_NUM_THREADS", "2")
         .env("OMP_NUM_THREADS", "2")
-        .env("OPENBLAS_NUM_THREADS", "2")
+        .env("OPENBLAS_NUM_THREADS", "1")
         .env("VECLIB_MAXIMUM_THREADS", "2")
         // Speakrs already parallelizes independent CPU jobs. Do not multiply
         // that by matrixmultiply's separate, otherwise automatic thread pool.

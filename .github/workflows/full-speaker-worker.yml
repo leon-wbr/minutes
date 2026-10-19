@@ -48,7 +48,7 @@ jobs:
           python-version: '3.12'
       - name: Install Linux audio dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libpipewire-0.3-dev libpulse-dev libclang-dev cmake pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libpipewire-0.3-dev libpulse-dev libclang-dev libopenblas-dev cmake pkg-config
       - name: Select Speech SDK on Intel macOS
         if: runner.os == 'macOS' && runner.arch == 'X64'
         run: echo "DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer" >> "$GITHUB_ENV"
@@ -72,6 +72,14 @@ jobs:
         run: cargo build --release --locked -p minutes-core --no-default-features --features diarize --example full_diarize_file
       - name: Host protocol and cancellation tests
         run: cargo test --locked -p minutes-core --no-default-features --features diarize --lib diarize::full_worker -- --test-threads=1
+      - name: Cache licensed public AMI audio and annotations
+        uses: actions/cache@v6
+        with:
+          path: |
+            fixtures/audio
+            fixtures/ATTRIBUTION.txt
+          key: full-speaker-ami-${{ hashFiles('tests/eval/diarization/full-native-ami.json') }}
+          enableCrossOsArchive: true
       - name: Explicitly fetch pinned public integration controls
         run: python tests/eval/diarization/fetch_full_pipeline.py --manifest tests/eval/diarization/full-native-ami.json --directory fixtures
       - name: Exercise actual worker through the host on complete recordings
