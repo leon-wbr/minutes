@@ -58,6 +58,7 @@ jobs:
             . -> target
             crates/speaker-worker -> target
           key: full-speaker-worker-${{ runner.arch }}
+          cache-on-failure: true
       - name: Build explicitly pinned CPU worker
         run: cargo build --release --locked --manifest-path crates/speaker-worker/Cargo.toml
       - name: Lint standalone helper and feature-gated host

@@ -101,23 +101,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let duration = sample_count as f64 / 16_000.0;
     let mut segments = Vec::new();
     for segment in result.segments {
-        let index: u8 = segment
-            .speaker
-            .strip_prefix("SPEAKER_")
-            .ok_or("unexpected native speaker label")?
-            .parse()?;
-        if index >= 64 {
-            return Err("speaker budget exceeded".into());
+        if let Some(segment) =
+            canonical_segment(&segment.speaker, segment.start, segment.end, duration)?
+        {
+            segments.push(segment);
         }
-        let end = segment.end.min(duration);
-        if segment.start >= end {
-            continue;
-        } // Discard only out-of-file padding.
-        segments.push(Segment {
-            speaker: format!("SPEAKER_{}", index + 1),
-            start: segment.start,
-            end,
-        });
     }
     let output = serde_json::to_vec(&Response {
         protocol: PROTOCOL,
@@ -132,6 +120,31 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     std::io::stdout().lock().write_all(&output)?;
     Ok(())
+}
+
+fn canonical_segment(
+    speaker: &str,
+    start: f64,
+    end: f64,
+    duration: f64,
+) -> Result<Option<Segment>, Box<dyn std::error::Error>> {
+    let index: u8 = speaker
+        .strip_prefix("SPEAKER_")
+        .ok_or("unexpected native speaker label")?
+        .parse()?;
+    if index >= 64 || speaker != format!("SPEAKER_{index:02}") {
+        return Err("unexpected native speaker label or speaker budget exceeded".into());
+    }
+    // Validate before clamping: f64::min would otherwise hide a NaN end time.
+    if !start.is_finite() || !end.is_finite() || start < 0.0 || end <= start {
+        return Err("invalid native speaker activity".into());
+    }
+    let end = end.min(duration);
+    Ok((start < end).then(|| Segment {
+        speaker: format!("SPEAKER_{}", index + 1),
+        start,
+        end,
+    }))
 }
 
 #[cfg(unix)]
@@ -221,8 +234,36 @@ fn install_limits() -> Result<(), Box<dyn std::error::Error>> {
     Err("unsupported worker platform".into())
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
+    #[test]
+    fn invalid_native_activity_cannot_be_hidden_by_padding_clamp() {
+        for (start, end) in [
+            (0.0, f64::NAN),
+            (f64::NAN, 1.0),
+            (0.0, f64::INFINITY),
+            (-1.0, 1.0),
+            (1.0, 1.0),
+            (2.0, 1.0),
+        ] {
+            assert!(super::canonical_segment("SPEAKER_00", start, end, 2.0).is_err());
+        }
+        for label in ["Mat", "SPEAKER_0", "SPEAKER_64"] {
+            assert!(super::canonical_segment(label, 0.0, 1.0, 2.0).is_err());
+        }
+        let padded = super::canonical_segment("SPEAKER_00", 1.0, 3.0, 2.0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (padded.speaker.as_str(), padded.start, padded.end),
+            ("SPEAKER_1", 1.0, 2.0)
+        );
+        assert!(super::canonical_segment("SPEAKER_00", 2.0, 3.0, 2.0)
+            .unwrap()
+            .is_none());
+    }
+
+    #[cfg(unix)]
     #[test]
     fn memory_ceiling_refuses_an_over_budget_mapping() {
         const MARKER: &str = "MINUTES_SPEAKER_MEMORY_TEST_CHILD";

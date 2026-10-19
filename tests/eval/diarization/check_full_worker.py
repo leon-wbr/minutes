@@ -16,6 +16,15 @@ root = Path(__file__).resolve().parent
 manifest = json.loads((root / 'full-native-ami.json').read_text())
 frozen = json.loads((root / 'reports/2026-10-18/full-native.json').read_text())
 expected = {r['id']: r for r in frozen['rows'] if r['engine'] == 'candidate'}
+identity = dict(probe_sha256=digest(a.probe), worker_sha256=digest(a.worker),
+                manifest_sha256=digest(root / 'full-native-ami.json'),
+                check_sha256=digest(Path(__file__)),
+                source_sha256={str(p): digest(root.parents[2] / p) for p in [
+                    Path('crates/core/src/diarize_full_worker.rs'),
+                    Path('crates/core/src/bounded_child.rs'),
+                    Path('crates/speaker-worker/src/main.rs'),
+                    Path('crates/speaker-worker/src/protocol.rs'),
+                    Path('crates/speaker-worker/Cargo.lock')]})
 a.output.mkdir(parents=True, exist_ok=False)
 rows = []
 # Kill only our own synthetic probe after its supervised worker appears. The
@@ -71,6 +80,7 @@ for item in manifest['recordings']:
     assert digest(audio) == item['files'][0]['sha256']
     reference_path = a.fixtures / 'audio' / item['files'][1]['name']
     assert digest(reference_path) == item['files'][1]['sha256']
+    print('Running ' + item['id'], flush=True)
     started = time.monotonic()
     with (a.output / (item['id'] + '.json')).open('xb') as out, (a.output / (item['id'] + '.stderr')).open('xb') as err:
         subprocess.run([str(a.probe.resolve()), str(a.worker.resolve()),
@@ -80,20 +90,20 @@ for item in manifest['recordings']:
     result = json.loads((a.output / (item['id'] + '.json')).read_text())
     assert result['profile_namespace'] == 'speakrs_af8013f_cpu_67f963b6_anonymous_v1'
     scored = score(reference_segments(reference_path, item['duration']), result, item['duration'])
-    assert scored['der'] <= expected[item['id']]['der'] + 0.01, 'wrapper regressed frozen model output'
-    assert scored['predicted_speakers'] == 4
-    assert elapsed / item['duration'] <= 0.25
-    assert digest(audio) == item['files'][0]['sha256'], 'input WAV changed'
-    rows.append(dict(id=item['id'], processing_seconds=elapsed, **scored))
+    gates = dict(der=scored['der'] <= expected[item['id']]['der'] + 0.01,
+                 speaker_count=scored['predicted_speakers'] == 4,
+                 runtime=elapsed / item['duration'] <= 0.25,
+                 input_preserved=digest(audio) == item['files'][0]['sha256'])
+    row = dict(id=item['id'], processing_seconds=elapsed,
+               real_time_factor=elapsed / item['duration'], gates=gates, **scored)
+    # Preserve failed measurements too; a failing gate is evidence, not a reason
+    # to lose the timing and exact executable/source identity.
+    (a.output / (item['id'] + '-regression.json')).write_text(
+        json.dumps(dict(**identity, **row), indent=2) + '\n')
+    print(json.dumps(row), flush=True)
+    assert all(gates.values()), 'frozen regression gates failed: ' + ', '.join(k for k, v in gates.items() if not v)
+    rows.append(row)
 report = dict(qualification='Already-seen public integration regression; not fresh model admission, live capture, ASR or named-profile qualification.',
-              probe_sha256=digest(a.probe), worker_sha256=digest(a.worker),
-              manifest_sha256=digest(root / 'full-native-ami.json'),
-              check_sha256=digest(Path(__file__)), parent_loss=parent_loss,
-              source_sha256={str(p): digest(root.parents[2] / p) for p in [
-                  Path('crates/core/src/diarize_full_worker.rs'),
-                  Path('crates/core/src/bounded_child.rs'),
-                  Path('crates/speaker-worker/src/main.rs'),
-                  Path('crates/speaker-worker/src/protocol.rs'),
-                  Path('crates/speaker-worker/Cargo.lock')]}, rows=rows)
+              **identity, parent_loss=parent_loss, rows=rows)
 (a.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
 print(json.dumps(report, indent=2))
