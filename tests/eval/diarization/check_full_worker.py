@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import platform
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -41,6 +42,8 @@ identity = dict(probe_sha256=digest(a.probe), worker_sha256=digest(a.worker),
                     Path('crates/core/src/diarize_full_worker.rs'),
                     Path('crates/core/src/bounded_child.rs'),
                     Path('crates/speaker-worker/src/main.rs'),
+                    Path('crates/speaker-worker/src/windows_handles.rs'),
+                    Path('crates/core/examples/full_diarize_file.rs'),
                     Path('crates/core/src/diarize_full_protocol.rs'),
                     Path('crates/speaker-worker/Cargo.toml'),
                     Path('crates/speaker-worker/build.rs'),
@@ -111,8 +114,16 @@ for item in manifest['recordings']:
                        stdin=subprocess.DEVNULL, stdout=out, stderr=err, timeout=930)
     elapsed = time.monotonic() - started
     if completed.returncode:
+        phases = {'handles_started', 'handles_closed', 'awaiting_pcm',
+                  'pcm_loaded', 'pipeline_ready', 'inference_complete'}
+        # The offline host probe emits only allowlisted progress. Never expose
+        # arbitrary child stderr through CI receipts or saved meeting errors.
+        observed = re.findall(r'\bworker_phase="([a-z_]+)"',
+                              (a.output / (item['id'] + '.stderr')).read_text(errors='replace'))
+        phase = next((value for value in reversed(observed) if value in phases), 'unreported')
         failure = dict(**identity, id=item['id'], processing_seconds=elapsed,
                        real_time_factor=elapsed / item['duration'],
+                       last_worker_phase=phase,
                        exit_code=completed.returncode, gates=dict(engine_completed=False))
         (a.output / (item['id'] + '-regression.json')).write_text(json.dumps(failure, indent=2) + '\n')
         print(json.dumps(failure), flush=True)

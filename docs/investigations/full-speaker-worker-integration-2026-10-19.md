@@ -30,13 +30,16 @@ The numeric [Linux report](full-speaker-worker-2026-10-19/f5e64349-linux.json) a
 [ARM64 report](full-speaker-worker-2026-10-19/f5e64349-arm.json) retain those bindings.
 The [failed Intel report](full-speaker-worker-2026-10-19/f5e64349-intel-failed.json)
 preserves its source bindings and failed runtime gate too.
+The [failed Windows report](full-speaker-worker-2026-10-19/f5e64349-windows-failed.json)
+records the 900-second deadline. Its CRLF source hashes were verified against the
+same Git revision with checkout line endings applied.
 
 | Platform | IS1008a seconds / ratio | TS3004a seconds / ratio | IB4001 seconds / ratio | Result |
 | --- | ---: | ---: | ---: | --- |
 | Linux x86-64 | 212.72 / 0.2254 | 299.48 / 0.2226 | 396.84 / 0.2228 | All frozen gates pass |
 | macOS ARM64 | 136.32 / 0.1444 | 188.75 / 0.1403 | 253.08 / 0.1421 | All frozen gates pass |
 | macOS Intel | 385.06 / 0.4079 | Not run after failure | Not run after failure | Runtime fails |
-| Windows x86-64 | Pending | Pending | Pending | Not qualified |
+| Windows x86-64 | Deadline at 900.03 / 0.9535 | Not run after failure | Not run after failure | No completed engine result |
 
 Passing Linux and ARM64 outputs reproduce DER 9.9478%, 21.1965% and 19.9164%,
 respectively, with four speakers in each recording and unchanged WAV hashes.
@@ -63,10 +66,26 @@ passes all three controls: 45.48, 64.80 and 86.62 seconds, ratios 0.0482, 0.0482
 and 0.0486, with the same DER, four speakers and unchanged inputs. Actual parent
 loss retirement passes. Release build, strict helper Clippy and all four helper
 tests pass with these compiler flags. The report's source and checker hashes
-match the proposed tree; its compiled Rust source is unchanged from `f5e64349`.
+match snapshot `dcac4139d2f4e14653ae420ea38cccb7793a382f`; its compiled Rust source
+is unchanged from `f5e64349`.
 This was a separate native Mac from the hosted runner; comparing their times does
 not measure the compiler flag's speedup. Linux, Intel and Windows still need their
 own native-CPU receipts.
+
+Windows still reached the 900-second deadline after static BLAS linkage. That
+receipt alone does not distinguish slow inference from a startup or transport
+stall. The next build adds fixed progress markers for handle fencing, PCM input,
+pipeline initialization and inference. The host accepts only exact allowlisted
+markers from bounded worker stderr; arbitrary errors, paths, audio and transcript
+content are never reflected through that diagnostic channel. The offline probe
+and regression runner preserve the last known phase on failure. This is
+observability, not a relaxed deadline or a claimed Windows repair.
+Before the full recordings, CI also invokes the actual host/helper on three
+seconds of generated silence with a separate 60-second smoke-test budget. That
+explicit model test is ignored in ordinary model-free unit runs and executed by
+name after the pinned public models are fetched. It checks an empty anonymous
+result, no embeddings and byte-for-byte WAV preservation. A failure prevents the
+longer qualification from running; it does not substitute for those recordings.
 
 ## Scope still unqualified
 

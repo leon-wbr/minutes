@@ -1,6 +1,14 @@
 //! Offline opt-in worker probe. No ASR, microphone, enrollment or configuration writes.
 use minutes_core::{config::Config, diarize, voice};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // This explicit offline probe reports only the host's allowlisted progress
+    // marker. The production dispatcher never reflects arbitrary worker stderr.
+    tracing_subscriber::fmt()
+        .with_env_filter("minutes_core::diarize::full_worker=debug")
+        .with_ansi(false)
+        .with_writer(std::io::stderr)
+        .try_init()
+        .map_err(|_| "could not initialize offline probe diagnostics")?;
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.len() != 3 {
         return Err("usage: full_diarize_file WORKER MODELS WAV".into());
@@ -20,7 +28,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ) {
         diarize::DiarizationOutcome::Result(result) => result,
         diarize::DiarizationOutcome::NotConfigured { reason } => {
-            return Err(reason.detail().into())
+            if reason == diarize::DiarizationUnavailable::WorkerTimedOut {
+                // The public dispatcher returns at its deadline; its detached
+                // supervisor then has a five-second retirement budget. Keep
+                // this offline probe alive briefly so that supervisor can
+                // publish its sanitized final phase before process exit.
+                // This grants no extra inference time or success outcome.
+                std::thread::sleep(std::time::Duration::from_secs(6));
+            }
+            return Err(reason.detail().into());
         }
         diarize::DiarizationOutcome::Skipped { .. } => {
             return Err("source-aware capture was degraded".into())

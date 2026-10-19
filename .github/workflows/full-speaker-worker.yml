@@ -129,6 +129,15 @@ jobs:
           enableCrossOsArchive: true
       - name: Explicitly fetch pinned public integration controls
         run: python tests/eval/diarization/fetch_full_pipeline.py --manifest tests/eval/diarization/full-native-ami.json --directory fixtures
+      - name: Actual native helper short-input protocol smoke
+        run: |
+          suffix=""
+          if [[ "$RUNNER_OS" == "Windows" ]]; then suffix=".exe"; fi
+          MINUTES_SPEAKER_SMOKE_WORKER="$GITHUB_WORKSPACE/crates/speaker-worker/target/release/minutes-speaker-worker${suffix}" \
+          MINUTES_SPEAKER_SMOKE_MODELS="$GITHUB_WORKSPACE/fixtures/candidate-models" \
+          cargo test --locked -p minutes-core --no-default-features --features diarize --lib \
+            diarize::full_worker::tests::real_worker_short_silence_preserves_protocol_and_completes \
+            -- --ignored --exact --nocapture --test-threads=1
       - name: Exercise actual worker through the host on complete recordings
         run: |
           suffix=""

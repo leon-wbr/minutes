@@ -24,8 +24,12 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    // Fixed markers only: never send model paths, audio or arbitrary errors to
+    // the host's diagnostic progress channel.
+    eprintln!("MINUTES_SPEAKER_PHASE handles_started");
     #[cfg(windows)]
     windows_handles::close_inherited_handles()?;
+    eprintln!("MINUTES_SPEAKER_PHASE handles_closed");
     if std::env::var("MINUTES_FULL_SPEAKER_WORKER_V1").as_deref() != Ok("1") {
         return Err("launch through the Minutes supervisor".into());
     }
@@ -66,13 +70,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         std::io::copy(&mut input, &mut output)?;
     }
     verify_models(snapshot.path())?;
+    eprintln!("MINUTES_SPEAKER_PHASE awaiting_pcm");
     let CanonicalAudio {
         samples,
         sha256: audio_sha256,
     } = read_pcm(std::io::stdin().lock(), MAX_SAMPLES)?;
+    eprintln!("MINUTES_SPEAKER_PHASE pcm_loaded");
     let sample_count = samples.len();
     let mut pipeline =
         speakrs::OwnedDiarizationPipeline::from_dir(snapshot.path(), speakrs::ExecutionMode::Cpu)?;
+    eprintln!("MINUTES_SPEAKER_PHASE pipeline_ready");
     let step = pipeline.segmentation_step();
     if !step.is_finite()
         || step < 1.0
@@ -81,6 +88,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Err("full speaker observation budget exceeded".into());
     }
     let result = pipeline.run(&samples)?;
+    eprintln!("MINUTES_SPEAKER_PHASE inference_complete");
     if result.segments.len() > MAX_SEGMENTS {
         return Err("segment budget exceeded".into());
     }

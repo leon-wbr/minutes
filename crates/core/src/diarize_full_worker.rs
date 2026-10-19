@@ -15,6 +15,29 @@ struct AudioInput {
     offset: usize,
 }
 
+fn last_worker_phase(stderr: &[u8]) -> &'static str {
+    const PHASES: &[&str] = &[
+        "handles_started",
+        "handles_closed",
+        "awaiting_pcm",
+        "pcm_loaded",
+        "pipeline_ready",
+        "inference_complete",
+    ];
+    stderr
+        .split(|byte| *byte == b'\n')
+        .rev()
+        .find_map(|line| {
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            let value = line.strip_prefix(b"MINUTES_SPEAKER_PHASE ")?;
+            PHASES
+                .iter()
+                .copied()
+                .find(|phase| value == phase.as_bytes())
+        })
+        .unwrap_or("unreported")
+}
+
 impl Read for AudioInput {
     fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
         let count = output.len().min(self.samples.len() * 4 - self.offset);
@@ -158,6 +181,11 @@ pub(super) fn diarize(
         },
         cancellation.cancelled.clone(),
     )?;
+    tracing::debug!(
+        worker_phase = last_worker_phase(&run.output.stderr),
+        timed_out = run.timed_out,
+        "full speaker worker completion"
+    );
     cancellation.check()?;
     if run.timed_out || !run.output.status.success() {
         // Do not reflect arbitrary worker stderr/audio/path content into saved meetings.
@@ -174,6 +202,67 @@ pub(super) fn diarize(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires the explicitly built native helper and public pinned models"]
+    fn real_worker_short_silence_preserves_protocol_and_completes() {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter("minutes_core::diarize::full_worker=debug")
+            .with_ansi(false)
+            .with_writer(std::io::stderr)
+            .try_init();
+        let mut config = Config::default();
+        config.diarization.engine = "speakrs".into();
+        config.diarization.speaker_worker_path = Some(
+            std::env::var_os("MINUTES_SPEAKER_SMOKE_WORKER")
+                .expect("provide the actual compiled helper")
+                .into(),
+        );
+        config.diarization.model_path = std::env::var_os("MINUTES_SPEAKER_SMOKE_MODELS")
+            .expect("provide the public pinned model directory")
+            .into();
+        let temp = tempfile::tempdir().unwrap();
+        let wav = temp.path().join("synthetic-silence.wav");
+        let mut writer = hound::WavWriter::create(
+            &wav,
+            hound::WavSpec {
+                channels: 1,
+                sample_rate: 16_000,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            },
+        )
+        .unwrap();
+        for _ in 0..48_000 {
+            writer.write_sample(0i16).unwrap();
+        }
+        writer.finalize().unwrap();
+        let before = std::fs::read(&wav).unwrap();
+        // A small synthetic protocol smoke, separate from the unchanged
+        // complete-recording 900-second deadline and frozen quality gates.
+        let cancellation = DiarizationCancellation::new(std::time::Duration::from_secs(60));
+        let result = diarize(&wav, &config, &cancellation).expect("native protocol smoke failed");
+        assert!(result.segments.is_empty());
+        assert_eq!(result.num_speakers, 0);
+        assert!(result.speaker_embeddings.is_empty());
+        assert_eq!(std::fs::read(&wav).unwrap(), before);
+    }
+
+    #[test]
+    fn progress_diagnostics_never_reflect_arbitrary_stderr() {
+        assert_eq!(
+            last_worker_phase(b"MINUTES_SPEAKER_PHASE awaiting_pcm\r\nprivate audio content\nMINUTES_SPEAKER_PHASE pipeline_ready\n"),
+            "pipeline_ready"
+        );
+        for untrusted in [
+            b"MINUTES_SPEAKER_PHASE secret-path\n".as_slice(),
+            b"prefix MINUTES_SPEAKER_PHASE pipeline_ready\n".as_slice(),
+            b"MINUTES_SPEAKER_PHASE pcm_loaded private content\n".as_slice(),
+            b"\xff\xfeprivate content".as_slice(),
+        ] {
+            assert_eq!(last_worker_phase(untrusted), "unreported");
+        }
+    }
+
     fn response() -> protocol::Response {
         protocol::Response {
             protocol: protocol::PROTOCOL,
