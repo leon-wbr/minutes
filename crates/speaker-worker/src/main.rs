@@ -1,5 +1,6 @@
 //! Isolated CPU inference only. Never captures, downloads, enrolls or writes audio.
 #[allow(dead_code)]
+#[path = "../../core/src/diarize_full_protocol.rs"]
 mod protocol;
 #[cfg(windows)]
 mod windows_handles;

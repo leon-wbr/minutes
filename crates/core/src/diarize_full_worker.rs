@@ -7,7 +7,7 @@ use std::path::Path;
 use zeroize::Zeroizing;
 
 #[allow(dead_code)] // Shared protocol includes worker-only constants and model verification.
-#[path = "../../speaker-worker/src/protocol.rs"]
+#[path = "diarize_full_protocol.rs"]
 mod protocol;
 
 struct AudioInput {

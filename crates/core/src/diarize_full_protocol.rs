@@ -1,4 +1,4 @@
-//! Versioned anonymous-speaker protocol shared with the host; no enrollment vectors.
+//! Versioned anonymous-speaker protocol shared by the host and unpublished helper.
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::Read;
