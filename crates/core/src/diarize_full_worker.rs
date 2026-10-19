@@ -49,12 +49,14 @@ fn validate_response(
             .speaker
             .strip_prefix("SPEAKER_")
             .and_then(|label| label.parse::<u8>().ok());
-        if !matches!(label, Some(1..=64))
-            || segment.speaker != format!("SPEAKER_{}", label.unwrap_or(0))
-            || !segment.start.is_finite()
-            || !segment.end.is_finite()
-            || !(0.0 <= segment.start && segment.start < segment.end && segment.end <= duration)
-        {
+        let valid_label = matches!(label, Some(1..=64))
+            && segment.speaker == format!("SPEAKER_{}", label.unwrap_or(0));
+        let valid_interval = segment.start.is_finite()
+            && segment.end.is_finite()
+            && 0.0 <= segment.start
+            && segment.start < segment.end
+            && segment.end <= duration;
+        if !valid_label || !valid_interval {
             return Err("full speaker worker returned invalid anonymous activity".into());
         }
         identities.insert(segment.speaker.clone());

@@ -7,7 +7,12 @@ on:
       - 'crates/core/src/diarize*'
       - 'crates/core/src/voice.rs'
       - 'crates/core/src/bounded_child.rs'
+      - 'crates/core/src/config.rs'
+      - 'crates/core/Cargo.toml'
       - 'crates/core/examples/full_diarize_file.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
       - 'tests/eval/diarization/**'
       - '.github/workflows/full-speaker-worker.yml'
   workflow_dispatch:
@@ -36,6 +41,8 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt, clippy
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -53,6 +60,11 @@ jobs:
           key: full-speaker-worker-${{ runner.arch }}
       - name: Build explicitly pinned CPU worker
         run: cargo build --release --locked --manifest-path crates/speaker-worker/Cargo.toml
+      - name: Lint standalone helper and feature-gated host
+        run: |
+          cargo fmt --manifest-path crates/speaker-worker/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path crates/speaker-worker/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --locked -p minutes-core --no-default-features --features diarize --lib --example full_diarize_file -- -D warnings
       - name: Worker memory-ceiling regression
         run: cargo test --locked --manifest-path crates/speaker-worker/Cargo.toml
       - name: Build actual host bridge probe

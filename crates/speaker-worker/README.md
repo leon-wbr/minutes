@@ -32,6 +32,12 @@ this wrapper does not redistribute weights.
 
 Opt in by editing your configuration deliberately (all paths must be absolute):
 
+The released Minutes 0.30.4 host does not implement this bridge. Build the
+Minutes CLI or desktop host from the same source revision as this helper, with
+the `diarize` feature enabled, before selecting this engine. Building the helper
+alone does not upgrade an installed app. For an offline check without changing
+an installed app or your configuration, use the probe below.
+
 ```toml
 [diarization]
 engine = "speakrs"
