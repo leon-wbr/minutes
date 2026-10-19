@@ -1,0 +1,79 @@
+name: Full speaker worker
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/speaker-worker/**'
+      - 'crates/core/src/diarize*'
+      - 'crates/core/src/voice.rs'
+      - 'crates/core/src/bounded_child.rs'
+      - 'crates/core/examples/full_diarize_file.rs'
+      - 'tests/eval/diarization/**'
+      - '.github/workflows/full-speaker-worker.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: full-speaker-worker-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install Linux audio dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libpipewire-0.3-dev libpulse-dev libclang-dev cmake pkg-config
+      - name: Select Speech SDK on Intel macOS
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        run: echo "DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            crates/speaker-worker -> target
+          key: full-speaker-worker-${{ runner.arch }}
+      - name: Build explicitly pinned CPU worker
+        run: cargo build --release --locked --manifest-path crates/speaker-worker/Cargo.toml
+      - name: Worker memory-ceiling regression
+        run: cargo test --locked --manifest-path crates/speaker-worker/Cargo.toml
+      - name: Build actual host bridge probe
+        run: cargo build --release --locked -p minutes-core --no-default-features --features diarize --example full_diarize_file
+      - name: Host protocol and cancellation tests
+        run: cargo test --locked -p minutes-core --no-default-features --features diarize --lib diarize::full_worker -- --test-threads=1
+      - name: Explicitly fetch pinned public integration controls
+        run: python tests/eval/diarization/fetch_full_pipeline.py --manifest tests/eval/diarization/full-native-ami.json --directory fixtures
+      - name: Exercise actual worker through the host on complete recordings
+        run: |
+          suffix=""
+          if [[ "$RUNNER_OS" == "Windows" ]]; then suffix=".exe"; fi
+          python tests/eval/diarization/check_full_worker.py \
+            --probe "target/release/examples/full_diarize_file${suffix}" \
+            --worker "crates/speaker-worker/target/release/minutes-speaker-worker${suffix}" \
+            --fixtures fixtures --output results
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: full-speaker-worker-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            results/*.json
+            fixtures/ATTRIBUTION.txt
+          if-no-files-found: warn
