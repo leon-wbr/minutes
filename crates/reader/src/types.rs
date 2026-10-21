@@ -293,3 +293,167 @@ pub struct ParsedMeeting {
     pub body: String,
     pub path: PathBuf,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn yaml<T: serde::de::DeserializeOwned>(s: &str) -> T {
+        serde_yaml::from_str(s).unwrap()
+    }
+
+    #[test]
+    fn attribution_source_known_labels_round_trip() {
+        for (label, expected) in [
+            ("deterministic", AttributionSource::Deterministic),
+            ("llm", AttributionSource::Llm),
+            ("enrollment", AttributionSource::Enrollment),
+            ("manual", AttributionSource::Manual),
+            ("ml-bleed-degraded", AttributionSource::MlBleedDegraded),
+            ("stem-recovery", AttributionSource::StemRecovery),
+        ] {
+            assert_eq!(yaml::<AttributionSource>(label), expected, "{label}");
+            assert_eq!(
+                serde_yaml::to_string(&expected).unwrap().trim(),
+                label,
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn attribution_source_preserves_unknown_label_verbatim() {
+        let parsed: AttributionSource = yaml("Some-New_Label");
+        assert_eq!(parsed, AttributionSource::Unknown("Some-New_Label".into()));
+        assert_eq!(
+            serde_yaml::to_string(&parsed).unwrap().trim(),
+            "Some-New_Label"
+        );
+    }
+
+    #[test]
+    fn attribution_source_label_matching_is_case_sensitive() {
+        assert_eq!(
+            yaml::<AttributionSource>("LLM"),
+            AttributionSource::Unknown("LLM".into())
+        );
+    }
+
+    #[test]
+    fn enums_use_documented_spellings() {
+        assert_eq!(
+            yaml::<OutputStatus>("transcript-only"),
+            OutputStatus::TranscriptOnly
+        );
+        assert_eq!(yaml::<OutputStatus>("no-speech"), OutputStatus::NoSpeech);
+        assert_eq!(
+            yaml::<DebriefStatus>("not-applicable"),
+            DebriefStatus::NotApplicable
+        );
+        assert_eq!(
+            yaml::<DiarizationPath>("ml-bleed-degraded"),
+            DiarizationPath::MlBleedDegraded
+        );
+        assert_eq!(
+            yaml::<IntentKind>("open-question"),
+            IntentKind::OpenQuestion
+        );
+        assert_eq!(yaml::<IntentKind>("action-item"), IntentKind::ActionItem);
+        assert_eq!(yaml::<Visibility>("team"), Visibility::Team);
+        assert_eq!(yaml::<CapturePolicy>("none"), CapturePolicy::None);
+    }
+
+    #[test]
+    fn enums_reject_unknown_values_unlike_attribution_source() {
+        assert!(serde_yaml::from_str::<OutputStatus>("half-done").is_err());
+        assert!(serde_yaml::from_str::<Confidence>("certain").is_err());
+        assert!(serde_yaml::from_str::<Sensitivity>("secret").is_err());
+        assert!(serde_yaml::from_str::<ContentType>("Meeting").is_err());
+    }
+
+    #[test]
+    fn failure_kind_other_carries_its_code() {
+        let kind: FailureKind =
+            serde_json::from_str(r#"{"other":{"code":"weird-driver"}}"#).unwrap();
+        assert_eq!(
+            kind,
+            FailureKind::Other {
+                code: "weird-driver".into()
+            }
+        );
+        assert_eq!(
+            yaml::<FailureKind>("permission-denied"),
+            FailureKind::PermissionDenied
+        );
+        assert_eq!(
+            yaml::<FailureKind>("backend-unavailable"),
+            FailureKind::BackendUnavailable
+        );
+    }
+
+    #[test]
+    fn entity_links_is_empty_requires_both_lists_empty() {
+        let mut links = EntityLinks::default();
+        assert!(links.is_empty());
+        links.projects.push(EntityRef {
+            slug: "apollo".into(),
+            label: "Apollo".into(),
+            aliases: vec![],
+        });
+        assert!(!links.is_empty());
+        links.projects.clear();
+        links.people.push(EntityRef {
+            slug: "ada".into(),
+            label: "Ada".into(),
+            aliases: vec!["A.".into()],
+        });
+        assert!(!links.is_empty());
+    }
+
+    #[test]
+    fn empty_optional_fields_are_omitted_when_serialized() {
+        let fm: Frontmatter =
+            yaml("title: T\ntype: meeting\ndate: 2026-03-17T12:00:00-07:00\nduration: 5m\n");
+        let out = serde_yaml::to_string(&fm).unwrap();
+        for key in [
+            "tags",
+            "attendees",
+            "people",
+            "entities",
+            "action_items",
+            "decisions",
+            "intents",
+            "speaker_map",
+            "status",
+            "source",
+            "visibility",
+            "recording_health",
+            "capture",
+            "processing_warnings",
+        ] {
+            assert!(
+                !out.contains(&format!("{key}:")),
+                "{key} leaked into:\n{out}"
+            );
+        }
+        assert!(out.contains("title: T"));
+        assert!(out.contains("type: meeting"));
+    }
+
+    #[test]
+    fn frontmatter_round_trips_through_yaml() {
+        let src = "title: Sync\ntype: meeting\ndate: 2026-03-17T12:00:00-07:00\nduration: 5m\nstatus: degraded\nprocessing_warnings:\n- step: summarize\n  reason: timeout\n  timeout_secs: 30\ntags:\n- a\naction_items:\n- assignee: mat\n  task: Send doc\n  due: friday\n  status: open\nintents:\n- kind: commitment\n  what: ship\n  who: ada\n  status: open\n";
+        let fm: Frontmatter = yaml(src);
+        assert_eq!(fm.status, Some(OutputStatus::Degraded));
+        assert_eq!(fm.processing_warnings[0].timeout_secs, Some(30));
+        assert!(fm.processing_warnings[0].message.is_none());
+
+        let again: Frontmatter = yaml(&serde_yaml::to_string(&fm).unwrap());
+        assert_eq!(again.title, fm.title);
+        assert_eq!(again.date, fm.date);
+        assert_eq!(again.processing_warnings, fm.processing_warnings);
+        assert_eq!(again.action_items[0].due.as_deref(), Some("friday"));
+        assert_eq!(again.intents[0].kind, IntentKind::Commitment);
+        assert_eq!(again.intents[0].by_date, None);
+    }
+}

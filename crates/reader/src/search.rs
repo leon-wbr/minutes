@@ -117,4 +117,162 @@ mod tests {
         let filtered = find_open_actions(dir.path(), Some("nobody"));
         assert!(filtered.is_empty());
     }
+
+    fn write_dated(dir: &Path, name: &str, title: &str, date: &str, actions: &str, body: &str) {
+        let content = format!(
+            "---\ntitle: {title}\ntype: meeting\ndate: {date}\nduration: 5m\n{actions}---\n\n{body}\n"
+        );
+        std::fs::write(dir.join(name), content).unwrap();
+    }
+
+    #[test]
+    fn list_meetings_orders_newest_first_and_truncates() {
+        let dir = TempDir::new().unwrap();
+        write_dated(
+            dir.path(),
+            "a.md",
+            "Old",
+            "2026-01-01T09:00:00-07:00",
+            "",
+            "x",
+        );
+        write_dated(
+            dir.path(),
+            "b.md",
+            "Newest",
+            "2026-03-01T09:00:00-07:00",
+            "",
+            "x",
+        );
+        write_dated(
+            dir.path(),
+            "c.md",
+            "Middle",
+            "2026-02-01T09:00:00-07:00",
+            "",
+            "x",
+        );
+
+        let all: Vec<_> = list_meetings(dir.path(), 10)
+            .into_iter()
+            .map(|m| m.frontmatter.title)
+            .collect();
+        assert_eq!(all, ["Newest", "Middle", "Old"]);
+
+        let top: Vec<_> = list_meetings(dir.path(), 2)
+            .into_iter()
+            .map(|m| m.frontmatter.title)
+            .collect();
+        assert_eq!(top, ["Newest", "Middle"]);
+        assert!(list_meetings(dir.path(), 0).is_empty());
+    }
+
+    #[test]
+    fn list_meetings_skips_non_markdown_unparseable_and_recurses() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("memos/nested")).unwrap();
+        write_dated(
+            dir.path(),
+            "top.md",
+            "Top",
+            "2026-03-01T09:00:00-07:00",
+            "",
+            "x",
+        );
+        write_dated(
+            &dir.path().join("memos/nested"),
+            "deep.md",
+            "Deep",
+            "2026-03-02T09:00:00-07:00",
+            "",
+            "x",
+        );
+        std::fs::write(dir.path().join("notes.txt"), "---\ntitle: no\n---\n").unwrap();
+        std::fs::write(dir.path().join("broken.md"), "no frontmatter").unwrap();
+
+        let titles: Vec<_> = list_meetings(dir.path(), 10)
+            .into_iter()
+            .map(|m| m.frontmatter.title)
+            .collect();
+        assert_eq!(titles, ["Deep", "Top"]);
+    }
+
+    #[test]
+    fn list_meetings_on_missing_dir_is_empty() {
+        let dir = TempDir::new().unwrap();
+        assert!(list_meetings(&dir.path().join("nope"), 10).is_empty());
+    }
+
+    #[test]
+    fn search_meetings_is_case_insensitive_over_title_and_body() {
+        let dir = TempDir::new().unwrap();
+        write_dated(
+            dir.path(),
+            "a.md",
+            "BUDGET Review",
+            "2026-03-01T09:00:00-07:00",
+            "",
+            "nothing",
+        );
+        write_dated(
+            dir.path(),
+            "b.md",
+            "Standup",
+            "2026-03-02T09:00:00-07:00",
+            "",
+            "we discussed the Budget",
+        );
+        write_dated(
+            dir.path(),
+            "c.md",
+            "Other",
+            "2026-03-03T09:00:00-07:00",
+            "",
+            "unrelated",
+        );
+
+        let titles: Vec<_> = search_meetings(dir.path(), "bUdGeT", 10)
+            .into_iter()
+            .map(|m| m.frontmatter.title)
+            .collect();
+        assert_eq!(titles, ["Standup", "BUDGET Review"]);
+        assert_eq!(search_meetings(dir.path(), "budget", 1).len(), 1);
+        assert!(search_meetings(dir.path(), "absent", 10).is_empty());
+    }
+
+    #[test]
+    fn search_meetings_does_not_match_frontmatter_only_text() {
+        let dir = TempDir::new().unwrap();
+        write_dated(
+            dir.path(),
+            "a.md",
+            "Title",
+            "2026-03-01T09:00:00-07:00",
+            "tags:\n  - secretword\n",
+            "body",
+        );
+        assert!(search_meetings(dir.path(), "secretword", 10).is_empty());
+    }
+
+    #[test]
+    fn find_open_actions_filters_status_and_assignee_case_insensitively() {
+        let dir = TempDir::new().unwrap();
+        write_dated(
+            dir.path(),
+            "a.md",
+            "A",
+            "2026-03-01T09:00:00-07:00",
+            "action_items:\n  - assignee: Mat\n    task: one\n    status: open\n  - assignee: mat\n    task: two\n    status: done\n  - assignee: sam\n    task: three\n    status: open\n  - assignee: mat\n    task: four\n    status: Open\n",
+            "x",
+        );
+
+        let all = find_open_actions(dir.path(), None);
+        let tasks: Vec<_> = all.iter().map(|(_, i)| i.task.as_str()).collect();
+        assert_eq!(tasks, ["one", "three"]);
+
+        let mat = find_open_actions(dir.path(), Some("MAT"));
+        assert_eq!(mat.len(), 1);
+        assert_eq!(mat[0].1.task, "one");
+        assert!(mat[0].0.ends_with("a.md"));
+    }
 }
